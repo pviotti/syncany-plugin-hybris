@@ -2,6 +2,7 @@ package org.syncany.plugins.hybris;
 
 import java.io.File;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
@@ -58,7 +59,6 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		return (HybrisTransferSettings) settings;
 	}
 
-	@Override
 	public void connect() throws StorageException {
 		
 		if (hybris == null) {
@@ -71,19 +71,16 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public void disconnect() throws StorageException {
 		// Nothing
 		logger.log(Level.INFO, "Hybris disconnect (not implemented)");
 		// hybris.shutdown();
 	}
 
-	@Override
 	public void init(boolean createIfRequired) throws StorageException {
 		connect();
 	}
 
-	@Override
 	public void download(RemoteFile remoteFile, File localFile) throws StorageException {
 		connect();
 
@@ -91,7 +88,12 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		String remotePath = getRemoteFile(remoteFile);
 		try {
 			// Download
-			byte[] data = hybris.get(remotePath);
+			byte[] data;
+			if (isDataRemoteFile(remoteFile))
+				data = hybris.get(remotePath);
+			else
+				data = hybris.rmds.rawRead(remotePath);
+			if (data == null) throw new Exception();
 			logger.log(Level.FINE, "- Downloaded: " + remotePath + " ...");
 			
 			tempFile = createTempFile(remoteFile.getName());
@@ -107,28 +109,33 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public void upload(File localFile, RemoteFile remoteFile) throws StorageException {
 		connect();
 
 		String remotePath = getRemoteFile(remoteFile);
 		try {
 			byte[] data = FileUtils.readFileToByteArray(localFile);
-			hybris.put(remotePath, data);
-			logger.log(Level.FINE, "- Uploading: " + remotePath + " ...");
+			if (isDataRemoteFile(remoteFile))
+				hybris.put(remotePath, data);
+			else
+				hybris.rmds.rawWrite(remotePath, data);
+			logger.log(Level.FINE, "- Uploaded: " + remotePath + " ...");
 		} catch (Exception e) {
 			logger.log(Level.SEVERE, "Cannot upload " + localFile + " to " + remotePath, e);
 			throw new StorageException(e);
 		}
 	}
 
-	@Override
 	public boolean delete(RemoteFile remoteFile) throws StorageException {
 		connect();
 
 		String remotePath = getRemoteFile(remoteFile);
 		try {
-			hybris.delete(remotePath);
+			if (isDataRemoteFile(remoteFile))
+				hybris.delete(remotePath);
+			else 
+				hybris.rmds.rawDelete(remotePath);
+			logger.log(Level.FINE, "- Removed: " + remotePath + " ...");
 			return true;
 		} catch (Exception e) {
 			logger.log(Level.SEVERE, "Unable to delete remote file " + remotePath, e);
@@ -136,29 +143,47 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public void move(RemoteFile sourceFile, RemoteFile targetFile) throws StorageException {
 		connect();
 
 		String sourceRemotePath = getRemoteFile(sourceFile);
 		String targetRemotePath = getRemoteFile(targetFile);
+		byte[] data;
 		try {
-			byte[] data = hybris.get(sourceRemotePath);
-			hybris.put(targetRemotePath, data);
-			hybris.delete(sourceRemotePath);
+			if (isDataRemoteFile(sourceFile)) {
+				data = hybris.get(sourceRemotePath);
+				hybris.put(targetRemotePath, data);
+				hybris.delete(sourceRemotePath);
+			} else {
+				data = hybris.rmds.rawRead(sourceRemotePath);
+				hybris.rmds.rawWrite(targetRemotePath, data);
+				hybris.rmds.rawDelete(sourceRemotePath);
+			}
+			
+			logger.log(Level.FINE, "- Moved: " + sourceRemotePath + " -> " + targetRemotePath);
 		} catch (Exception e) {
 			logger.log(Level.SEVERE, "Cannot move " + sourceRemotePath + " to " + targetRemotePath, e);
 			throw new StorageMoveException(e);
 		}
 	}
 
-	@Override
 	public <T extends RemoteFile> Map<String, T> list(Class<T> remoteFileClass) throws StorageException {
 		connect();
 
 		try {
 			// List
-			List<String> objects = hybris.list();
+			List<String> objects;
+			if (remoteFileClass.equals(MultichunkRemoteFile.class))
+				objects = hybris.list();
+			else {
+				objects = hybris.rmds.rawList();
+				Iterator<String> i = objects.iterator();
+				while (i.hasNext()) {
+				   String s = i.next();
+				   if (!s.startsWith(getRemoteFilePath(remoteFileClass)))
+					   i.remove();
+				}
+			}
 
 			// Create RemoteFile objects
 			Map<String, T> remoteFiles = new HashMap<String, T>();
@@ -169,8 +194,7 @@ public class HybrisTransferManager extends AbstractTransferManager {
 					try {
 						T remoteFile = RemoteFile.createRemoteFile(simpleRemoteName, remoteFileClass);
 						remoteFiles.put(simpleRemoteName, remoteFile);
-					}
-					catch (Exception e) {
+					} catch (Exception e) {
 						logger.log(Level.INFO, "Cannot create instance of " + remoteFileClass.getSimpleName() + " for object " + simpleRemoteName
 										+ "; maybe invalid file name pattern. Ignoring file.");
 					}
@@ -183,17 +207,20 @@ public class HybrisTransferManager extends AbstractTransferManager {
 			throw new StorageException(e);
 		}
 	}
+	
+	private boolean isDataRemoteFile(RemoteFile remoteFile) {
+		return remoteFile.getClass().equals(MultichunkRemoteFile.class)
+				|| (remoteFile.getClass().equals(TempRemoteFile.class) && remoteFile.getName().contains("multichunk"));
+	}
 
 	private String getRemoteFile(RemoteFile remoteFile) {
 		String remoteFilePath = getRemoteFilePath(remoteFile.getClass());
-
 		if (remoteFilePath != null)
 			return remoteFilePath + remoteFile.getName();
 		else
 			return remoteFile.getName();
 	}
 
-	@Override
 	public String getRemoteFilePath(Class<? extends RemoteFile> remoteFile) {
 		if (remoteFile.equals(MultichunkRemoteFile.class)) 
 			return multichunksPath;
@@ -209,7 +236,6 @@ public class HybrisTransferManager extends AbstractTransferManager {
 			return null;
 	}
 
-	@Override
 	public boolean testTargetCanWrite() {
 		try {
 			String tempRemoteFilePath = "syncany-test-write";
@@ -222,7 +248,6 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public boolean testTargetExists() {
 		try {
 			hybris.list();
@@ -233,7 +258,6 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public boolean testTargetCanCreate() {
 		try {
 			return testTargetCanWrite();
@@ -243,11 +267,10 @@ public class HybrisTransferManager extends AbstractTransferManager {
 		}
 	}
 
-	@Override
 	public boolean testRepoFileExists() {
 		try {
 			String repoRemoteFile = getRemoteFile(new SyncanyRemoteFile());
-			List<String> repoFiles = hybris.list();
+			List<String> repoFiles = hybris.rmds.rawList();
 			
 			if (repoFiles.contains(repoRemoteFile))
 				return true;
@@ -261,13 +284,25 @@ public class HybrisTransferManager extends AbstractTransferManager {
 
 	public static class HybrisReadAfterWriteConsistentFeatureExtension implements ReadAfterWriteConsistentFeatureExtension {
 
-		public HybrisReadAfterWriteConsistentFeatureExtension(HybrisTransferManager hybrisTransferManager) {}
+//		private HybrisTransferManager htm;
 		
-		@Override
+		public HybrisReadAfterWriteConsistentFeatureExtension(HybrisTransferManager hybrisTransferManager) {
+//			this.htm = hybrisTransferManager;
+		}
+		
 		public boolean exists(RemoteFile remoteFile) throws StorageException {
-			// because Hybris is strongly consistent
-			// TODO check that exists using hybris.list
+			// it should always return true because Hybris is strongly consistent by design
 			return true;
+//			String remoteFilePath = htm.getRemoteFile(remoteFile);
+//			try {
+//				if (remoteFile.getClass().equals(MultichunkRemoteFile.class))
+//					return htm.hybris.list().contains(remoteFilePath);
+//				else
+//					return htm.hybris.rmds.rawList().contains(remoteFilePath);
+//			} catch (HybrisException e) {
+//				logger.log(Level.INFO, "exists: Hybris could not list.", e);
+//				return false;
+//			}
 		}
 	}
 }

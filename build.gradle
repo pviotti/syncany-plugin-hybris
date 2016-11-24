@@ -13,7 +13,7 @@ configurations {
 project.ext {
 	pluginId = "hybris"
 	pluginName = "Hybris"
-	pluginVersion = "0.1"
+	pluginVersion = "0.2"
 	pluginDebianVersion = "1"
 	pluginDate = new Date()
 	pluginAppMinVersion = "0.4.6-alpha"
@@ -21,15 +21,15 @@ project.ext {
 	pluginConflictsWith = ""
 
 	pluginVersionSnapshot = rootProject.ext.applicationVersionSnapshot
-	pluginVersionFull = "${pluginVersion}${pluginVersionSnapshot}"
+	pluginVersionFull = "${pluginVersion}" //${pluginVersionSnapshot}
 	pluginNeedsOperatingSystemAndArchitecture = false
 }
 
 dependencies {
 	compile			project(':syncany-lib')
-	compile			"fr.eurecom.hybris:hybris:0.4.0-SNAPSHOT"
+	compile			"fr.eurecom.hybris:hybris:0.5.0-SNAPSHOT"
 	
-	pluginjar		"fr.eurecom.hybris:hybris:0.4.0-SNAPSHOT"
+	pluginjar		"fr.eurecom.hybris:hybris:0.5.0-SNAPSHOT"
 
 	testCompile		"junit:junit:4.12"
 	testCompile		project(path: ':syncany-lib', configuration: 'tests')
